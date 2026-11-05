@@ -32,6 +32,7 @@ to the module that defines it.
 13. [Authoring an embodiment adapter](guide/adapters.md): declare spaces and
     pass conformance.
 14. [Command-line interface](guide/cli.md): every `inspect-robots` command.
+15. [Model integration guide](guide/guide.md): inputs, actions, adapters and the evaluation pipeline for a new model.
 
 ## Upgrading
 
