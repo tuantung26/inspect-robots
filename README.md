@@ -433,6 +433,9 @@ shipped from this repo as separate packages:
   `--voice`, or narrate streamed policy notes and terminal summaries with
   `run --speak`. Spoken input is feedback-only, so trial end and verdicts stay
   on the keyboard.
+- **[inspect-robots-velma](plugins/inspect-robots-velma/)**: evaluate
+  pick-and-place policies against the VELMA SO-101 MuJoCo simulator through
+  its MCP server (`--embodiment velma`). The adapter refuses hardware backends.
 
 ```bash
 # Isaac Lab world + a π0 checkpoint served by XPolicyLab, evaluated end to end:

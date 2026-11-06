@@ -98,7 +98,7 @@ class instead of comparing names.
 
 ## First-party plugins
 
-Six plugins ship from the Inspect Robots repository as separate packages, covering policies,
+Seven plugins ship from the Inspect Robots repository as separate packages, covering policies,
 embodiments, and attended operator input:
 
 - [`inspect-robots-ros`](https://github.com/robocurve/inspect-robots/tree/main/plugins/inspect-robots-ros):
@@ -127,6 +127,9 @@ embodiments, and attended operator input:
   `run --speak`. Silence filtering protects the input path. Speech synthesis and
   playback always run on a worker, while blocking speech may wait boundedly on
   that work from the control thread.
+- [`inspect-robots-velma`](../../plugins/inspect-robots-velma/):
+  evaluate pick-and-place policies against the VELMA SO-101 MuJoCo simulator
+  over its MCP server (`--embodiment velma`). This adapter is simulator-only.
 
 ### `inspect-robots-isaacsim`: the body
 
