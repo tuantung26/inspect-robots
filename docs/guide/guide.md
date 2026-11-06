@@ -1,10 +1,10 @@
-# Tich hop va danh gia model moi
+# Tích hợp và đánh giá model mới
 
-Tai lieu nay mo ta du lieu dau vao, dau ra va luong chay khi dua mot policy/model moi vao Inspect Robots. Framework cung cap giao dien chung; adapter van phai chuyen doi du lieu theo dung yeu cau cua model va robot.
+Tài liệu này mô tả dữ liệu đầu vào, đầu ra và luồng chạy khi đưa một policy/model mới vào Inspect Robots. Framework cung cấp giao diện chung; adapter vẫn phải chuyển đổi dữ liệu theo đúng yêu cầu của model và robot.
 
-## Cac thanh phan dau vao
+## Các thành phần đầu vào
 
-Mot lan danh gia ghep ba thanh phan:
+Một lần đánh giá ghép ba thành phần:
 
 | Thanh phan | Vai tro |
 | --- | --- |
@@ -12,11 +12,11 @@ Mot lan danh gia ghep ba thanh phan:
 | `Policy` | Adapter goi model, chuyen quan sat thanh input model va chuyen output model thanh action. |
 | `Embodiment` | Adapter robot hoac simulator, tao quan sat va thuc thi action. |
 
-`Task` chua cac `Scene`. Moi scene co the mo ta chi dan, target, seed va metadata. So lan lap (`epochs`) giup danh gia do on dinh cua policy tren cung mot scene. Xem [`Task`](../../src/inspect_robots/task.py) va [`Scene`](../../src/inspect_robots/scene.py).
+`Task` chứa các `Scene`. Mỗi scene có thể mô tả chỉ dẫn, target, seed và metadata. Số lần lặp (`epochs`) giúp đánh giá độ ổn định của policy trên cùng một scene. Xem [`Task`](../../src/inspect_robots/task.py) và [`Scene`](../../src/inspect_robots/scene.py).
 
-## Du lieu policy nhan
+## Dữ liệu policy nhận
 
-Framework goi `policy.act(observation)` voi mot [`Observation`](../../src/inspect_robots/types.py), gom cac truong chuan:
+Framework gọi `policy.act(observation)` với một [`Observation`](../../src/inspect_robots/types.py), gồm các trường chuẩn:
 
 | Truong | Dinh dang |
 | --- | --- |
@@ -26,53 +26,53 @@ Framework goi `policy.act(observation)` voi mot [`Observation`](../../src/inspec
 | `image_times`, `state_time` | Moc thoi gian cua du lieu neu embodiment cung cap. |
 | `extra` | Du lieu bo sung; rollout tu them buoc moi truong va thong tin operator. |
 
-Day la giao dien cua framework, khong phai dinh dang bat buoc cua model. Policy adapter tu resize/normalize anh, tao tensor, chuan hoa state hoac doi ten truong theo yeu cau model. Hop dong cua policy la [`Policy`](../../src/inspect_robots/policy.py); mo ta camera, state va action space nam trong [`spaces.py`](../../src/inspect_robots/spaces.py).
+Đây là giao diện của framework, không phải định dạng bắt buộc của model. Policy adapter tự resize/normalize ảnh, tạo tensor, chuẩn hóa state hoặc đổi tên trường theo yêu cầu model. Hợp đồng của policy là [`Policy`](../../src/inspect_robots/policy.py); mô tả camera, state và action space nằm trong [`spaces.py`](../../src/inspect_robots/spaces.py).
 
-### Neu model can video tham chieu
+### Nếu model cần video tham chiếu
 
-`Observation` khong co truong video tham chieu rieng. Co the dat dinh danh hoac duong dan clip trong metadata cua scene, sau do policy doc thong tin do tai `reset(scene)` va nap/cat frame theo yeu cau model. Neu clip can duoc scorer dung lai, hay dua thong tin can thiet vao `Target.spec` hoac record metadata; scorer nhan `Record` va `Target`, khong nhan truc tiep `Scene`.
+`Observation` không có trường video tham chiếu riêng. Có thể đặt định danh hoặc đường dẫn clip trong metadata của scene, sau đó policy đọc thông tin đó tại `reset(scene)` và nạp/cắt frame theo yêu cầu model. Nếu clip cần được scorer dùng lại, hãy đưa thông tin cần thiết vào `Target.spec` hoặc record metadata; scorer nhận `Record` và `Target`, không nhận trực tiếp `Scene`.
 
-Adapter can tu xu ly dinh dang video, toc do frame, dong bo thoi gian va cach ghep clip tham chieu voi quan sat hien tai.
+Adapter cần tự xử lý định dạng video, tốc độ frame, đồng bộ thời gian và cách ghép clip tham chiếu với quan sát hiện tại.
 
-## Dau ra policy
+## Đầu ra policy
 
-Policy tra ve mot [`ActionChunk`](../../src/inspect_robots/types.py), gom mot hoac nhieu `Action`. Moi `Action.data` la mang so NumPy co so chieu phai khop voi action space cua embodiment. Y nghia cua vector do duoc khai bao rieng, vi du:
+Policy trả về một [`ActionChunk`](../../src/inspect_robots/types.py), gồm một hoặc nhiều `Action`. Mỗi `Action.data` là mảng số NumPy có số chiều phải khớp với action space của embodiment. Ý nghĩa của vector đó được khai báo riêng, ví dụ:
 
-- `joint_pos`: vi tri muc tieu cua cac khop.
-- `joint_vel`: van toc khop.
-- `joint_delta`: thay doi vi tri khop.
-- `eef_abs_pose` hoac `eef_delta_pose`: pose tuyet doi hoac thay doi cua dau cong tac.
+- `joint_pos`: vị trí mục tiêu của các khớp.
+- `joint_vel`: vận tốc khớp.
+- `joint_delta`: thay đổi vị trí khớp.
+- `eef_abs_pose` hoặc `eef_delta_pose`: pose tuyệt đối hoặc thay đổi của đầu công tác.
 
-Action space con khai bao gioi han, frame toa do, bieu dien xoay va nhan tung chieu neu can. Adapter phai chuyen output model sang dung don vi, thu tu khop, frame va control mode. Khong nen gia dinh framework co the suy ra cac y nghia nay tu vector.
+Action space còn khai báo giới hạn, frame tọa độ, biểu diễn xoay và nhãn từng chiều nếu cần. Adapter phải chuyển output model sang đúng đơn vị, thứ tự khớp, frame và control mode. Không nên giả định framework có thể suy ra các ý nghĩa này từ vector.
 
-Action chunk cho phep model du doan nhieu buoc tu mot lan suy luan. Action manager chon cac buoc de thuc thi va thoi diem goi policy lai. Policy co the phat action ket thuc nhu `done` hoac `give_up`, nhung day khong phai phan xet thanh cong.
+Action chunk cho phép model dự đoán nhiều bước từ một lần suy luận. Action manager chọn các bước để thực thi và thời điểm gọi policy lại. Policy có thể phát action kết thúc như `done` hoặc `give_up`, nhưng đây không phải phán xét thành công.
 
-## Embodiment va ket qua moi buoc
+## Embodiment và kết quả mỗi bước
 
-Embodiment khai bao `info`, sau do cung cap:
+Embodiment khai báo `info`, sau đó cung cấp:
 
 ```python
 observation = embodiment.reset(scene, seed=seed)
 result = embodiment.step(action)
 ```
 
-`reset()` chuan bi scene va tra ve quan sat ban dau. `step()` thuc thi mot action va tra ve `StepResult`: quan sat moi, tuy chon `reward`, co ket thuc hay khong, ly do ket thuc, va `info` tuy chon cho scorer (vi du khoang cach toi muc tieu).
+`reset()` chuẩn bị scene và trả về quan sát ban đầu. `step()` thực thi một action và trả về `StepResult`: quan sát mới, tùy chọn `reward`, có kết thúc hay không, lý do kết thúc, và `info` tùy chọn cho scorer (ví dụ khoảng cách tới mục tiêu).
 
-Voi robot that, embodiment chiu trach nhiem ket noi, doc sensor, gui lenh, va dam bao nhip dieu khien an toan. Rollout khong tu cho theo chu ky; embodiment can tu pacing trong `step()` neu phan cung can dieu do. Xem [`Embodiment`](../../src/inspect_robots/embodiment.py).
+Với robot thật, embodiment chịu trách nhiệm kết nối, đọc sensor, gửi lệnh, và đảm bảo nhịp điều khiển an toàn. Rollout không tự chờ theo chu kỳ; embodiment cần tự pacing trong `step()` nếu phần cứng cần điều đó. Xem [`Embodiment`](../../src/inspect_robots/embodiment.py).
 
-## Pipeline danh gia
+## Pipeline đánh giá
 
 ```text
-Task (Scene + rubric + budget)
+Task (Scene + rubric + ngân sách)
               |
               v
-Policy va Embodiment khai bao spaces
+Policy và Embodiment khai báo spaces
               |
               v
-Kiem tra tuong thich truoc rollout
+Kiểm tra tương thích trước rollout
               |
               v
-Reset policy va embodiment theo scene/seed
+Reset policy và embodiment theo scene/seed
               |
               v
 Observation -> policy/model -> ActionChunk
@@ -80,38 +80,38 @@ Observation -> policy/model -> ActionChunk
               v
 Action manager -> guardrails -> embodiment.step()
               |
-              +---- quan sat moi, lap lai den khi ket thuc
+              +---- quan sát mới, lặp lại đến khi kết thúc
               |
               v
-Record cua trial -> grader neu duoc cau hinh -> scorer
+Record của trial -> grader nếu được cấu hình -> scorer
               |
               v
-Gop diem qua epochs va scenes -> EvalLog
+Gộp điểm qua epochs và scenes -> EvalLog
 ```
 
-Truoc khi chay, framework kiem tra kich thuoc va ngu nghia action, cac camera/state policy can, va kha nang dap ung budget cua task. Trong rollout, guard co the gioi han action hoac dung run neu co loi an toan. Moi buoc, action chunk, su kien va loi duoc ghi vao record.
+Trước khi chạy, framework kiểm tra kích thước và ngữ nghĩa action, các camera/state policy cần, và khả năng đáp ứng ngân sách của task. Trong rollout, guard có thể giới hạn action hoặc dừng run nếu có lỗi an toàn. Mỗi bước, action chunk, sự kiện và lỗi được ghi vào record.
 
-Sau rollout, grader co the ghi nhan phan xet cua operator hoac VLM. Scorer doc record va target de cham; scorer khong dieu khien model. Reducer nhu `mean` gop cac epoch cua mot scene, sau do metric tong hop tren cac scene co diem. Neu muon cham do giong video, benchmark can dinh nghia scorer va du lieu can thiet, vi du cach can chinh thoi gian va sai so quỹ dao; viec dua video vao model khong tu dong tao ra metric do. Xem [Scoring](scoring.md).
+Sau rollout, grader có thể ghi nhận phán xét của operator hoặc VLM. Scorer đọc record và target để chấm; scorer không điều khiển model. Reducer như `mean` gộp các epoch của một scene, sau đó metric tổng hợp trên các scene có điểm. Nếu muốn chấm độ giống video, benchmark cần định nghĩa scorer và dữ liệu cần thiết, ví dụ cách căn chỉnh thời gian và sai số quỹ đạo; việc đưa video vào model không tự động tạo ra metric đó. Xem [Scoring](scoring.md).
 
-## Dau ra cua lan danh gia
+## Đầu ra của lần đánh giá
 
-`eval()` tra ve danh sach `EvalLog` va mac dinh ghi JSON vao thu muc log. Log chua:
+`eval()` trả về danh sách `EvalLog` và mặc định ghi JSON vào thư mục log. Log chứa:
 
-- Ten task, policy, embodiment; seed va cau hinh chay.
-- Trang thai, ly do ket thuc va loi theo scene/trial.
-- Diem theo rubric, scene va epoch; metric tong hop.
-- So buoc, thoi gian chay va do tre suy luan.
-- Tuy chon: record chi tiet, action chunks, anh, transcript va du lieu Rerun.
+- Tên task, policy, embodiment; seed và cấu hình chạy.
+- Trạng thái, lý do kết thúc và lỗi theo scene/trial.
+- Điểm theo rubric, scene và epoch; metric tổng hợp.
+- Số bước, thời gian chạy và độ trễ suy luận.
+- Tùy chọn: record chi tiết, action chunks, ảnh, transcript và dữ liệu Rerun.
 
-Co the xem JSON bang `inspect-robots inspect LOG.json` hoac tao bao cao bang `inspect-robots view LOG.json`. Cau truc log duoc dinh nghia trong [`log.py`](../../src/inspect_robots/log.py).
+Có thể xem JSON bằng `inspect-robots inspect LOG.json` hoặc tạo báo cáo bằng `inspect-robots view LOG.json`. Cấu trúc log được định nghĩa trong [`log.py`](../../src/inspect_robots/log.py).
 
-## Checklist khi tich hop model moi
+## Checklist khi tích hợp model mới
 
-1. Xac dinh model can nhung dau vao nao va adapter se lay chung tu `Observation`, `Scene` hay nguon ngoai.
-2. Dinh nghia action space cua embodiment: so chieu, don vi, thu tu, frame, gioi han va control mode.
-3. Viet policy adapter de tien xu ly input model va chuyen output thanh `ActionChunk`.
-4. Viet embodiment adapter cho simulator hoac robot; bat dau bang simulator neu co the.
-5. Tao task/scenes va scorer phu hop voi muc tieu. Tach rieng cham hoan thanh, an toan va do giong demo neu can.
-6. Chay kiem tra tuong thich, sau do thu voi seed co dinh va xem log truoc khi thu tren phan cung that.
+1. Xác định model cần những đầu vào nào và adapter sẽ lấy chúng từ `Observation`, `Scene` hay nguồn ngoài.
+2. Định nghĩa action space của embodiment: số chiều, đơn vị, thứ tự, frame, giới hạn và control mode.
+3. Viết policy adapter để tiền xử lý input model và chuyển output thành `ActionChunk`.
+4. Viết embodiment adapter cho simulator hoặc robot; bắt đầu bằng simulator nếu có thể.
+5. Tạo task/scenes và scorer phù hợp với mục tiêu. Tách riêng chấm hoàn thành, an toàn và độ giống demo nếu cần.
+6. Chạy kiểm tra tương thích, sau đó thử với seed cố định và xem log trước khi thử trên phần cứng thật.
 
-Framework cung cap pipeline va giao dien chung, nhung khong tu dong viet adapter cho model, robot hoac video format moi.
+Framework cung cấp pipeline và giao diện chung, nhưng không tự động viết adapter cho model, robot hoặc video format mới.

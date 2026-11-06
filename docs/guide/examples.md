@@ -10,6 +10,28 @@ here override your config; the [CLI guide](cli.md) documents every flag.
 For physical rig setup, SSH viewing, YAM health checks, control advice, and
 Pi 0.5 serving, see the [rig reference](rig-reference.md).
 
+## Run a no-hardware evaluation
+
+The CubePick example exercises a complete evaluation with five seeded scenes,
+two epochs per scene, and success, episode-length, and minimum-distance
+scorers. It needs no robot, simulator, API key, or GPU:
+
+```bash
+uv run python examples/cubepick_case.py
+```
+
+The scripted policy is an oracle for this toy environment, so this run checks
+the evaluation pipeline rather than measuring a learned model.
+
+To make a one-page chart dashboard from the saved evaluation log:
+
+```bash
+uv run python examples/visualize_eval_log.py logs/cubepick-case/<run>.json --open
+```
+
+The report is standalone HTML with per-scene charts for steps, distance, and
+success rate. It uses inline SVG and does not need a charting package.
+
 ## Choosing a model
 
 LLM policies take the model as a policy arg rather than a top-level flag. The
