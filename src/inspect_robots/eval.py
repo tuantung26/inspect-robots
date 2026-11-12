@@ -152,6 +152,7 @@ def _write_action_log(
             json.dumps(
                 {
                     "kind": "header",
+                    "created_at": _now_iso(),
                     "run_id": run_stamp,
                     "scene_id": record.scene_id,
                     "epoch": record.epoch,
@@ -165,6 +166,7 @@ def _write_action_log(
             json.dumps(
                 {
                     "t": step.t,
+                    "executed_at": step.executed_at,
                     "action": [float(value) for value in np.asarray(step.action.data).ravel()],
                 },
                 allow_nan=False,

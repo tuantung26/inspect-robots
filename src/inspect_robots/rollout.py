@@ -17,6 +17,7 @@ import warnings
 import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
@@ -89,7 +90,8 @@ class StepRecord:
     When a [`FrameStore`][inspect_robots.frames.FrameStore] is used, both
     ``observation`` and ``result.observation`` have their images stripped.
     ``image_refs`` and ``result_image_refs`` hold the corresponding on-disk
-    handles instead (R5).
+    handles instead (R5). ``executed_at`` is the UTC wall-clock time immediately
+    before the action was sent to the embodiment.
     """
 
     t: int
@@ -98,6 +100,7 @@ class StepRecord:
     result: StepResult
     image_refs: Mapping[str, FrameRef] | None = None
     result_image_refs: Mapping[str, FrameRef] | None = None
+    executed_at: str | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -671,6 +674,7 @@ def rollout(
                 )
 
             store[_EXECUTED_ACTION_KEY] = action
+            executed_at = datetime.now(UTC).isoformat()
             try:
                 result: StepResult = embodiment.step(action)
             except InspectRobotsError as exc:
@@ -696,6 +700,7 @@ def rollout(
                     result=result_rec,
                     image_refs=refs,
                     result_image_refs=result_refs,
+                    executed_at=executed_at,
                 )
             )
             record.events.append(

@@ -76,7 +76,7 @@ def test_joint_action_is_sent_as_degrees() -> None:
     embodiment.reset(velma_pick_place_task().scenes[0])
     embodiment.step(Action(data=np.deg2rad(np.array([1, 2, 3, 4, 5], dtype=np.float64))))
 
-    tool, arguments = calls[-1]
+    tool, arguments = next(call for call in reversed(calls) if call[0] == "set_joint_angles")
     assert tool == "set_joint_angles"
     assert arguments["shoulder_pan_deg"] == pytest.approx(1.0)
     assert arguments["wrist_roll_deg"] == pytest.approx(5.0)
@@ -246,6 +246,57 @@ def test_scorer_reads_final_recorded_step() -> None:
     assert score.value is True
 
 
+def test_stack_reset_passes_all_objects_and_uses_stack_termination() -> None:
+    """Container success must not terminate a stacking trial."""
+    from inspect_robots_velma.task import velma_stack_three_task
+
+    calls: list[tuple[str, dict[str, object]]] = []
+    stacked = False
+
+    def fake_call(tool: str, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+        calls.append((tool, dict(arguments)))
+        if tool == "get_backend_info":
+            return {"backend": "simulation"}
+        payload = _state(placed=True)
+        state = payload["robot_state"]
+        assert isinstance(state, dict)
+        state.update(stacked=stacked, holding_object=False, active_object="cube3")
+        return payload
+
+    embodiment = VelmaEmbodiment(_call=fake_call)
+    obs = embodiment.reset(velma_stack_three_task().scenes[0])
+    reset_args = next(args for name, args in calls if name == "reset_scene")
+    assert reset_args["cube2_x"] == pytest.approx(0.115)
+    assert reset_args["cube3_y"] == pytest.approx(-0.285)
+    tool = next(
+        t
+        for t in embodiment.contribute_tools(embodiment.info.action_space)
+        if t.name == "velma_place"
+    )
+    result = tool.run({"x_m": 0.2, "y_m": -0.15, "z_m": 0.075, "mode": "stack"}, obs)
+    assert result.chunk is not None
+    assert not embodiment.step(result.chunk.actions[0]).terminated
+    stacked = True
+    result = tool.run({"x_m": 0.2, "y_m": -0.15, "z_m": 0.075, "mode": "stack"}, obs)
+    assert result.chunk is not None
+    assert embodiment.step(result.chunk.actions[0]).terminated
+    assert next(args for name, args in calls if name == "place")["mode"] == "stack"
+
+
+def test_camera_capture_enabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unset environment variable must not silently blind the agent."""
+    monkeypatch.delenv("VELMA_CAPTURE_IMAGES", raising=False)
+    calls: list[str] = []
+
+    def fake_call(tool: str, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+        calls.append(tool)
+        return {"backend": "simulation"} if tool == "get_backend_info" else _state()
+
+    embodiment = VelmaEmbodiment(_call=fake_call)
+    embodiment.reset(velma_pick_place_task().scenes[0])
+    assert "capture_cameras" in calls
+
+
 def test_scorer_rejects_direct_place_without_round_trip() -> None:
     from inspect_robots.rollout import Record, StepRecord
 
@@ -266,3 +317,49 @@ def test_scorer_rejects_direct_place_without_round_trip() -> None:
     score = velma_cube_in_container()(record, None)
 
     assert score.value is False
+
+
+def test_stack_task_declares_three_near_cubes() -> None:
+    from inspect_robots_velma.task import velma_stack_three_task
+
+    task = velma_stack_three_task()
+    scene = task.scenes[0]
+
+    assert task.name == "velma-stack-three"
+    assert scene.id == "three-cubes-stack"
+    assert scene.target is not None
+    assert scene.target.kind == "stacked"
+    assert scene.metadata["cube_x"] == pytest.approx(0.085)
+    assert scene.metadata["cube2_x"] == pytest.approx(0.115)
+    assert scene.metadata["cube3_x"] == pytest.approx(0.10)
+    assert scene.metadata["stack_x"] == pytest.approx(0.20)
+    assert scene.metadata["stack_y"] == pytest.approx(-0.15)
+    assert "three 30 mm cubes" in scene.instruction
+    assert "stacked" in scene.instruction
+
+
+def test_stack_scorer_accepts_three_grasps_and_stacked() -> None:
+    from inspect_robots.rollout import Record, StepRecord
+    from inspect_robots_velma.task import velma_three_cubes_stacked
+
+    obs = Observation()
+    record = Record(scene_id="stack", epoch=0, seed=0)
+    for _ in range(3):
+        record.steps.append(
+            StepRecord(
+                t=0,
+                observation=obs,
+                action=Action(data=np.zeros(1), meta={"velma_tool_call": "grasp"}),
+                result=StepResult(observation=obs, info={"is_grasping": True}),
+            )
+        )
+    record.steps.append(
+        StepRecord(
+            t=0,
+            observation=obs,
+            action=Action(data=np.zeros(1), meta={"velma_tool_call": "place"}),
+            result=StepResult(observation=obs, info={"is_grasping": False, "stacked": True}),
+        )
+    )
+    score = velma_three_cubes_stacked()(record, None)
+    assert score.value is True

@@ -19,6 +19,23 @@ uv sync --all-packages --extra dev
 The `velma` embodiment and `velma-pick-place` task then appear in
 `inspect-robots list`.
 
+## Three-cube stacking task
+
+`velma-stack-three` uses `models/so101/stack3.xml`: three 30 mm cubes are
+clustered near the container centre, so the arm does not need a long reach.
+The task asks the model to take them out and stack them at `(0.20, -0.15)` on
+object-centre z levels `0.015 / 0.045 / 0.075`. VELMA computes a server-side `stacked`
+boolean from the three cube poses; the scorer requires that flag and at least
+three successful grasps.
+
+From the Inspect Robots workspace, start VELMA with the stack scene and run:
+
+```powershell
+& "C:\Users\Hi\OneDrive\Documents\GitHub\run-velma-eval.ps1" `
+    -Task velma-stack-three `
+    -Scene models/so101/stack3.xml
+```
+
 ## Start the VELMA simulator
 
 In the VELMA checkout, confirm `config.yaml` uses `backend.type: simulation`,
@@ -103,8 +120,37 @@ does not expand these operations into joint trajectories; its action log
 contains a no-op placeholder for each high-level tool call. Use VELMA's own
 logs when you need the simulator's internal actuation trace.
 
-This task uses known setup coordinates rather than camera localization because
-the sphere begins inside the container. `get_robot_state` returns camera frames,
-but this adapter reads only the JSON state and ignores the images. VELMA's
+Legacy tasks may include nominal setup/search coordinates in their instructions.
+The adapter also decodes camera frames into policy observations when capture is enabled. VELMA's
 `start_recording` / `stop_recording` tools are not contributed to the policy;
 use VELMA's own recorder if you need a video.
+
+
+## Manifest tasks and persistent sessions
+
+A compatible VELMA checkout provides `pipeline.cmd --scene <scene.yaml>
+--instruction <request>`. The launcher generates MuJoCo XML and normalized scene
+JSON, starts the host, and keeps a loopback session service running. The
+`velma-generic` embodiment exposes object-ID measurement/grasp and destination
+placement tools; `velma-agent` limits the policy to those tools and termination.
+Install the `agent` extra when using these features outside the full workspace.
+
+The `velma-task` task accepts `manifest=<generated scene.json>` and optional
+`instruction`/`max_steps` for ordinary evaluations. Use embodiment
+`velma-generic` and policy `velma-agent`; the running host must match the manifest
+digest. Object setup poses are not part of the policy catalog. Dimensions and
+colours are declared priors; metric poses come from calibrated RGB fitting.
+
+`python -m inspect_robots_velma.session --url <MCP URL> --port 8780
+--status-file <path>` runs the persistent service independently. Its endpoints
+are GET `/session/status`, GET `/session/observe`, and POST `/session/start`,
+`/session/submit_instruction`, `/session/reset`, `/session/close`. POST bodies
+are JSON; submit requires `instruction`. Requests are serialized, returning
+HTTP 409 while busy. Reset is explicit and clears conversation history. Close
+is for idle sessions and does not implement an emergency stop.
+
+Agent `done` and `evaluation.verified` are independent: verification applies to
+the YAML's configured goal, which can span several requests. Simulator contact
+and object state are still used internally for execution/evaluation. This is
+not a hardware or vision-only adapter. VELMA's `SCENES.md` documents the scene
+schema, supported geometry/capabilities, session examples and test runner.

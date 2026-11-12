@@ -15,19 +15,28 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "mypy>=1.11", "ruff>=0.6"]
+agent = ["inspect-robots-agent>=0.30"]
+dev = ["pytest>=8.0", "mypy>=1.11", "ruff>=0.6", "inspect-robots-agent>=0.30"]
 
 [project.entry-points."inspect_robots.embodiments"]
 velma = "inspect_robots_velma:velma_embodiment"
+velma-generic = "inspect_robots_velma.generic:generic_embodiment"
 
 [project.entry-points."inspect_robots.tasks"]
 velma-pick-place = "inspect_robots_velma.task:velma_pick_place_task"
+velma-stack-three = "inspect_robots_velma.task:velma_stack_three_task"
+velma-task = "inspect_robots_velma.generic:manifest_task"
+
+[project.entry-points."inspect_robots.policies"]
+velma-agent = "inspect_robots_velma.generic_policy:object_agent_policy"
 
 [project.entry-points."inspect_robots.scorers"]
 velma-cube-in-container = "inspect_robots_velma.task:velma_cube_in_container"
+velma-three-cubes-stacked = "inspect_robots_velma.task:velma_three_cubes_stacked"
 
 [tool.uv.sources]
 inspect-robots = { workspace = true }
+inspect-robots-agent = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/inspect_robots_velma"]

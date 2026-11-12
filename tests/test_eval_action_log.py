@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import warnings
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
@@ -87,15 +88,20 @@ def test_eval_writes_complete_action_log_and_pointer(tmp_path: Path) -> None:
     run_stamp = Path(pointer).parts[1]
     assert header == {
         "kind": "header",
+        "created_at": header["created_at"],
         "run_id": run_stamp,
         "scene_id": "s0",
         "epoch": 0,
         "action_dim": 2,
         "labels": ["dx", "dy"],
     }
+    assert datetime.fromisoformat(header["created_at"]).tzinfo == UTC
     assert [step["t"] for step in steps] == list(range(len(record.steps)))
     assert len(steps) == len(record.steps) > 0
     for line, step in zip(steps, record.steps, strict=True):
+        assert line["executed_at"] == step.executed_at
+        assert step.executed_at is not None
+        assert datetime.fromisoformat(step.executed_at).tzinfo == UTC
         np.testing.assert_array_equal(line["action"], np.asarray(step.action.data).ravel())
 
 

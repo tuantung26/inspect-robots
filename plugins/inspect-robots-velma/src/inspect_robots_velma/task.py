@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -136,6 +137,144 @@ def velma_pick_place_task(
             )
         ],
         scorer=velma_cube_in_container(),
+        max_steps=max_steps,
+        epochs=Epochs(count=epochs, reducer="mean"),
+    )
+
+
+@dataclass(frozen=True)
+class VelmaThreeCubesStacked:
+    """Score the three-cube task from VELMA's server-side stack flag."""
+
+    name: str = "velma_three_cubes_stacked"
+
+    def __call__(self, record: Record, target: Target | None) -> Score:
+        """Require a stable stack and three distinct verified object pickups."""
+        del target
+        final = record.steps[-1].result.info if record.steps else {}
+        stacked = bool(final.get("stacked"))
+        grasps = sum(
+            1
+            for step in record.steps
+            if step.action.meta.get("velma_tool_call") == "grasp"
+            and (
+                step.result.info.get("holding_object") is True
+                or step.result.info.get("is_grasping") is True
+            )
+        )
+        identities = {
+            step.result.info.get("active_object")
+            for step in record.steps
+            if step.action.meta.get("velma_tool_call") == "grasp"
+            and step.result.info.get("holding_object") is True
+            and step.result.info.get("active_object")
+        }
+        success = stacked and grasps >= 3 and (not identities or len(identities) >= 3)
+        return Score(
+            value=success,
+            explanation=(
+                "three cubes were removed and stacked"
+                if success
+                else f"stack not complete (stacked={stacked}, successful grasps={grasps})"
+            ),
+        )
+
+
+@scorer("velma-three-cubes-stacked")
+def velma_three_cubes_stacked() -> VelmaThreeCubesStacked:
+    """Create the three-cube stacking scorer."""
+    return VelmaThreeCubesStacked()
+
+
+_DEFAULT_STACK_INSTRUCTION = (
+    "There are three 30 mm cubes on the table. Their actual positions are unknown. "
+    "Nominal SEARCH SEEDS only: red (0.085, -0.255), green (0.115, -0.255), "
+    "yellow (0.100, -0.285), metres. These are not grasp coordinates; the cubes may "
+    "have moved or exchanged positions. Pick red, then green, then yellow and "
+    "stack them at (0.200, -0.150): first at z=0.015, second at "
+    "z=0.045, third at z=0.075. Use mode='stack' for every velma_place. "
+    "Before EVERY grasp call velma_measure_cube(colour, seed_x, seed_y, width_mm=30). "
+    "Use its fresh measured xyz and set grasp_height_m to its measured z_m. "
+    "Check holding_object after grasp; is_grasping is instantaneous pad contact. "
+    "Initial coordinates are setup inputs, not live measurements. If a cube moves "
+    "or grasp fails, call velma_measure_cube again for that colour "
+    "before retrying. Pass the measured centre, grasp height and width. Never retry "
+    "stale coordinates after a bump. At most two attempts per cube. Exactly one "
+    "tool call per turn. For this known-size cube task do not call find_object "
+    "or triangulate: velma_measure_cube already measures the centre in calibrated "
+    "views. Do not call move_joints or open_gripper after grasp. "
+    "Call done ONLY when stacked=true; otherwise give_up."
+)
+
+
+def velma_stack_three_task(
+    *,
+    instruction: str | None = None,
+    max_steps: int = 40,
+    epochs: int = 1,
+    layout: str = "original",
+    layout_seed: int = 0,
+) -> Task:
+    """Build the three-cube stacking task for the VELMA simulator."""
+    cube_x, cube_y, cube_z = 0.085, -0.255, 0.035
+    cube2_x, cube2_y, cube2_z = 0.115, -0.255, 0.035
+    cube3_x, cube3_y, cube3_z = 0.100, -0.285, 0.035
+    if layout not in ("original", "shifted", "permuted", "random"):
+        raise ValueError("layout must be original, shifted, permuted or random")
+    points = [(cube_x, cube_y), (cube2_x, cube2_y), (cube3_x, cube3_y)]
+    if layout == "shifted":
+        points = [(x + 0.010, y + 0.004) for x, y in points]
+    elif layout == "permuted":
+        # Six millimetres of source clearance avoids zero-gap contact impulses
+        # when the solver's geom order changes under a colour permutation.
+        points = [(0.1 + (x - 0.1) * 1.2, -0.265 + (y + 0.265) * 1.2) for x, y in points]
+        points = [points[2], points[0], points[1]]
+    elif layout == "random":
+        points = [(0.1 + (x - 0.1) * 1.2, -0.265 + (y + 0.265) * 1.2) for x, y in points]
+        generator = random.Random(layout_seed)
+        generator.shuffle(points)
+        dx, dy = generator.uniform(-0.008, 0.008), generator.uniform(-0.006, 0.006)
+        points = [(x + dx, y + dy) for x, y in points]
+    (cube_x, cube_y), (cube2_x, cube2_y), (cube3_x, cube3_y) = points
+    container_x, container_y, container_z = 0.500, 0.500, 0.0
+    stack_x, stack_y = 0.200, -0.150
+    if instruction is None:
+        instruction = _DEFAULT_STACK_INSTRUCTION
+    if not instruction.strip():
+        raise ValueError("instruction must be a non-empty string")
+    metadata = {
+        "layout": layout,
+        "layout_seed": layout_seed,
+        "cube_x": cube_x,
+        "cube_y": cube_y,
+        "cube_z": cube_z,
+        "cube2_x": cube2_x,
+        "cube2_y": cube2_y,
+        "cube2_z": cube2_z,
+        "cube3_x": cube3_x,
+        "cube3_y": cube3_y,
+        "cube3_z": cube3_z,
+        "container_x": container_x,
+        "container_y": container_y,
+        "container_z": container_z,
+        "stack_x": stack_x,
+        "stack_y": stack_y,
+        "stack_z1": 0.015,
+        "stack_z2": 0.045,
+        "stack_z3": 0.075,
+    }
+    return Task(
+        name="velma-stack-three",
+        scenes=[
+            Scene(
+                id="three-cubes-stack",
+                instruction=instruction,
+                target=Target(kind="stacked", spec={"count": 3}),
+                init_seed=0,
+                metadata=metadata,
+            )
+        ],
+        scorer=velma_three_cubes_stacked(),
         max_steps=max_steps,
         epochs=Epochs(count=epochs, reducer="mean"),
     )

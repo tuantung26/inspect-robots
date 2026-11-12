@@ -1,0 +1,1 @@
+Fix VELMA stacking reset and task-specific termination. Enable camera observations by default, expose calibrated known-size cube measurements and precise stacking placement, and distinguish verified holding from instantaneous pad contact. Stacking instructions require fresh measurements after contact and reject completion until the simulator reports a stable stack.

@@ -7,8 +7,12 @@ import base64
 import io
 import json
 import math
+import os
+import time as _time
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -31,6 +35,8 @@ from inspect_robots.spaces import (
 )
 from inspect_robots.tools import CONTROL, Tool, ToolLibrary, ToolResult
 from inspect_robots.types import Action, ActionChunk, Observation, StepResult
+
+from .dashboard_trace import archive_snapshot
 
 _JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
 _LOW = np.deg2rad(np.array([-110.0, -100.0, -96.8, -95.0, -157.2]))
@@ -123,12 +129,13 @@ async def _call_mcp_async(
                 except json.JSONDecodeError:
                     payload = {"text": item.text}
                     break
-                if isinstance(decoded, dict):
-                    payload = decoded
-                else:
-                    payload = {"result": decoded}
+                payload = decoded if isinstance(decoded, dict) else {"result": decoded}
                 break
     if images:
+        order = payload.get("camera_order", [])
+        if isinstance(order, list):
+            for i, name in enumerate(order[: len(images)]):
+                images[i]["camera"] = str(name)
         payload["_images"] = images
     return payload
 
@@ -174,7 +181,7 @@ def _decode_images(raw: Any) -> dict[str, np.ndarray]:
             frame = PILImage.open(io.BytesIO(base64.b64decode(data))).convert("RGB")
         except Exception:
             continue
-        images[f"velma_{index}"] = np.asarray(frame)
+        images[str(item.get("camera", f"velma_{index}"))] = np.asarray(frame)
     return images
 
 
@@ -249,9 +256,13 @@ class VelmaEmbodiment(EmbodimentBase):
         self._request = _call or _default_call(url, request_timeout_s)
         self._cached_state: Mapping[str, Any] | None = None
         self._cached_payload: Mapping[str, Any] = {}
+        self._image_dir: Path | None = None
+        self._image_step = 0
+        self._mcp_events: list[dict[str, Any]] = []
         # A run only succeeds when the object has actually left the container and
         # come back. Starting inside (a retrieval task) must not terminate at step 1.
         self._seen_outside = False
+        self._target_kind = "cube_in_container"
         self.info = EmbodimentInfo(
             name="velma",
             action_space=Box(
@@ -270,17 +281,25 @@ class VelmaEmbodiment(EmbodimentBase):
             ),
             control_hz=10.0,
             is_simulated=True,
-            supported_target_kinds=frozenset({"cube_in_container"}),
+            supported_target_kinds=frozenset({"cube_in_container", "stacked"}),
             docs=(
                 "VELMA SO-101 MuJoCo simulator. Joint actions are absolute radians in "
                 f"this order: {', '.join(_JOINTS)}. Cartesian coordinates use metres "
-                "in the arm-base frame (x forward, y left, z up). Use the contributed "
-                "velma_find_object and velma_triangulate tools for measured object "
-                "coordinates; do not infer coordinates from hidden ground truth. "
+                "in the arm-base frame (x forward, y left, z up). For known-size "
+                "coloured cubes use velma_measure_cube directly. For other objects "
+                "use velma_find_object and velma_triangulate. Do not infer metric "
+                "coordinates from hidden ground truth or uncalibrated images. "
                 "velma_grasp drives the grasp from the measured point you pass, never "
                 "from the target's live simulator pose; pass grasp_height_m for spheres. "
                 "For a pick-and-place task, grasp the measured object, then measure the "
                 "container and place the object inside it."
+                " For stacking use velma_measure_cube before each grasp, holding_object "
+                "to verify a lift, and velma_place(mode='stack'). Only report done when "
+                "stacked=true. Camera views are side, overhead and wrist; a wrist "
+                "view can point away from the table. Metric xyz needs calibrated "
+                "measurement, not visual guessing. The simulator internally uses "
+                "object feedback for execution and collision checking; this is not "
+                "a vision-only or hardware policy."
             ),
             environment_id="velma-so101-mujoco",
         )
@@ -302,6 +321,7 @@ class VelmaEmbodiment(EmbodimentBase):
         if not report.ok:
             raise RuntimeError(report.summary())
         metadata = scene.metadata
+        self._target_kind = scene.target.kind if scene.target is not None else "cube_in_container"
         coordinates = {
             key: float(metadata[key])
             for key in (
@@ -311,10 +331,20 @@ class VelmaEmbodiment(EmbodimentBase):
                 "container_x",
                 "container_y",
                 "container_z",
+                "cube2_x",
+                "cube2_y",
+                "cube2_z",
+                "cube3_x",
+                "cube3_y",
+                "cube3_z",
+                "stack_x",
+                "stack_y",
             )
             if key in metadata
         }
         self._request("reset_scene", coordinates)
+        if os.environ.get("VELMA_CAPTURE_IMAGES", "0").strip() in ("1", "true", "True", "yes"):
+            self._start_image_run()
         observation = self._refresh_observation(scene.instruction)
         self._seen_outside = observation.extra.get("cube_in_container") is not True
         return observation
@@ -336,18 +366,33 @@ class VelmaEmbodiment(EmbodimentBase):
             raise RuntimeError("VELMA tool action completed without a cached robot state")
 
         assert self._cached_state is not None
-        observation = self._observation(
-            self._cached_state, None, self._cached_payload.get("_images")
-        )
+        images = self._cached_payload.get("_images")
+        if not images:
+            images = self._capture_images()
+        self._save_images(images, "step")
+        observation = self._observation(self._cached_state, None, images)
         inside = self._cached_state.get("cube_in_container") is True
         if not inside:
             self._seen_outside = True
-        success = inside and self._seen_outside
+        success = (
+            self._cached_state.get("stacked") is True
+            if self._target_kind == "stacked"
+            else inside and self._seen_outside
+        )
         info = {
             key: self._cached_state[key]
-            for key in ("cube_in_container", "is_grasping", "obstacle_hit")
+            for key in (
+                "cube_in_container",
+                "is_grasping",
+                "holding_object",
+                "active_object",
+                "obstacle_hit",
+                "stacked",
+            )
             if key in self._cached_state
         }
+        snapshot_id = self._log_mcp("observation", "step", {}, info, images)
+        observation = replace(observation, extra={**observation.extra, "mcp_event_id": snapshot_id})
         return StepResult(
             observation=observation,
             terminated=success,
@@ -361,6 +406,21 @@ class VelmaEmbodiment(EmbodimentBase):
         string = {"type": "string", "description": "Object description used by VELMA perception."}
         number = {"type": "number", "description": "Measured coordinate in metres."}
         tool_specs: tuple[_ToolSpec, ...] = (
+            (
+                "velma_measure_cube",
+                "Measure a known-size upright red/green/yellow cube in calibrated RGB "
+                "views. Use before grasp and after any bump. xyz are fresh "
+                "measurements; width is a supplied prior. On warning do not grasp. This "
+                "avoids guessing metric coordinates from an uncalibrated image.",
+                {
+                    "colour": {"type": "string", "description": "red, green or yellow"},
+                    "seed_x": number,
+                    "seed_y": number,
+                    "width_mm": number,
+                },
+                ("colour", "seed_x", "seed_y"),
+                "measure_cube",
+            ),
             (
                 "velma_find_object",
                 "Locate a named object using VELMA's camera perception. "
@@ -380,8 +440,10 @@ class VelmaEmbodiment(EmbodimentBase):
             (
                 "velma_grasp",
                 "Gently grasp the object at a measured 3D point. The measured point "
-                "drives the grasp, so pass the triangulate result. Pass its measured "
-                "width in mm. For a sphere, explicitly pass grasp_height_m at its equator.",
+                "drives the grasp. For known-size cubes pass the velma_measure_cube "
+                "result directly; no extra wrist orbit is needed. For other objects "
+                "pass triangulate coordinates and measured width in mm. For a sphere, "
+                "explicitly pass grasp_height_m at its equator.",
                 {
                     "x_m": number,
                     "y_m": number,
@@ -396,14 +458,28 @@ class VelmaEmbodiment(EmbodimentBase):
                         "type": "number",
                         "description": "Object width measured by VELMA perception, in millimetres.",
                     },
+                    "object_yaw_deg": {
+                        "type": "number",
+                        "description": "Measured box yaw in degrees; omit if unknown.",
+                    },
                 },
                 ("x_m", "y_m", "z_m", "grasp_height_m", "object_width_mm"),
                 "grasp",
             ),
             (
                 "velma_place",
-                "Place the held object at a measured 3D container position.",
-                {"x_m": number, "y_m": number, "z_m": number},
+                "Place a held object. For stacking pass mode='stack'; xyz means desired "
+                "OBJECT centre, not TCP. Only place after holding_object=true; "
+                "is_grasping is instantaneous contact. Check status and stacked.",
+                {
+                    "x_m": number,
+                    "y_m": number,
+                    "z_m": number,
+                    "mode": {
+                        "type": "string",
+                        "description": "stack for precision stacking; container for bin placement",
+                    },
+                },
                 ("x_m", "y_m", "z_m"),
                 "place",
             ),
@@ -459,6 +535,13 @@ class VelmaEmbodiment(EmbodimentBase):
             self._cached_payload = result
             self._cached_state = state
             note = json.dumps(result, sort_keys=True, default=str)
+            self._log_mcp(
+                "tool",
+                endpoint,
+                payload,
+                result.get("message") if isinstance(result, Mapping) else result,
+                result.get("_images") if isinstance(result, Mapping) else None,
+            )
             action = Action(
                 data=_NOOP.copy(),
                 meta={"velma_tool_call": endpoint},
@@ -470,13 +553,121 @@ class VelmaEmbodiment(EmbodimentBase):
 
         return run
 
+    def _start_image_run(self) -> None:
+        """Create a folder for the images the policy actually receives."""
+        self._image_dir = Path.cwd() / "logs" / "velma-image-runs" / _time.strftime("%Y%m%d-%H%M%S")
+        self._image_dir.mkdir(parents=True, exist_ok=True)
+        self._image_step = 0
+
+    def _save_images(self, raw_images: Any, tag: str) -> None:
+        """Persist the MCP JPEGs so the post-run report can show them."""
+        if not raw_images or self._image_dir is None:
+            return
+        self._image_step += 1
+        for index, item in enumerate(raw_images):
+            if not isinstance(item, Mapping):
+                continue
+            data = item.get("data")
+            if not isinstance(data, str):
+                continue
+            try:
+                payload = base64.b64decode(data)
+            except Exception:
+                continue
+            path = self._image_dir / f"{self._image_step:03d}-{tag}-{index}.jpg"
+            path.write_bytes(payload)
+
+    def _log_mcp(
+        self,
+        kind: str,
+        name: str,
+        arguments: Any,
+        result: Any,
+        images: Any,
+    ) -> str:
+        """Write the live MCP/tool trace consumed by the VELMA dashboard."""
+        image_urls: list[str] = []
+        camera_names: list[str] = []
+        if isinstance(images, list):
+            for item in images:
+                if not isinstance(item, Mapping):
+                    continue
+                data = item.get("data")
+                if not isinstance(data, str):
+                    continue
+                mime = item.get("mime_type") or "image/jpeg"
+                image_urls.append(f"data:{mime};base64,{data}")
+                camera_names.append(str(item.get("camera", f"image_{len(image_urls)}")))
+        event = {
+            "t": _time.time(),
+            "kind": kind,
+            "name": name,
+            "args": arguments,
+            "result": str(result)[:1200],
+            "images": image_urls,
+            "camera_names": camera_names,
+        }
+        snapshot_id = archive_snapshot(event)
+        event["id"] = snapshot_id
+        self._mcp_events.append(event)
+        del self._mcp_events[:-12]
+        try:
+            path = Path(
+                os.environ.get(
+                    "VELMA_MCP_LOG",
+                    str(Path.cwd() / "logs" / "velma-mcp-live.json"),
+                )
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps(
+                    {"updated": _time.time(), "events": self._mcp_events},
+                    ensure_ascii=False,
+                    default=str,
+                ),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except OSError:
+            pass
+        return snapshot_id
+
+    def _capture_images(self) -> list[Mapping[str, Any]]:
+        """Capture side+wrist frames for the policy observation.
+
+        Headless runs can render both cameras. Viewer mode has no offscreen
+        context, so this returns [] and the observation stays text-only.
+        Set VELMA_CAPTURE_IMAGES=0 to skip the extra capture.
+        """
+        if os.environ.get("VELMA_CAPTURE_IMAGES", "1").strip() in ("0", "false", "False", "no"):
+            return []
+        try:
+            payload = self._request("capture_cameras", {})
+        except Exception:
+            return []
+        images = payload.get("_images")
+        return list(images) if isinstance(images, list) else []
+
     def _refresh_observation(self, instruction: str | None) -> Observation:
         """Read a fresh state from VELMA and cache it for the next step."""
         self._cached_payload = self._request("get_robot_state", {})
         self._cached_state = _robot_state(self._cached_payload)
-        return self._observation(
-            self._cached_state, instruction, self._cached_payload.get("_images")
-        )
+        images = self._cached_payload.get("_images")
+        if not images:
+            images = self._capture_images()
+        self._save_images(images, "obs")
+        snapshot_id = None
+        if isinstance(self._cached_state, Mapping):
+            snapshot_id = self._log_mcp(
+                "reset",
+                "observation",
+                {},
+                {"stacked": self._cached_state.get("stacked")},
+                images,
+            )
+        observation = self._observation(self._cached_state, instruction, images)
+        return replace(observation, extra={**observation.extra, "mcp_event_id": snapshot_id})
 
     @staticmethod
     def _observation(
@@ -489,7 +680,14 @@ class VelmaEmbodiment(EmbodimentBase):
             instruction=instruction,
             extra={
                 key: state[key]
-                for key in ("cube_in_container", "is_grasping", "obstacle_hit")
+                for key in (
+                    "cube_in_container",
+                    "is_grasping",
+                    "holding_object",
+                    "active_object",
+                    "obstacle_hit",
+                    "stacked",
+                )
                 if key in state
             },
         )
